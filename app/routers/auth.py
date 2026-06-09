@@ -3,14 +3,19 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from typing import Optional
 from app.config import settings
 import app.db as db
+import logging
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 def get_current_user(session: Optional[str]) -> Optional[dict]:
     if not session or not settings.secret_key:
         return None
-    return db.parse_session(session, settings.secret_key)
+    try:
+        return db.parse_session(session, settings.secret_key)
+    except Exception:
+        return None
 
 
 LOGIN_HTML = """<!DOCTYPE html>
@@ -94,12 +99,20 @@ async def login_page():
 
 @router.post("/login")
 async def do_login(request: Request, email: str = Form(""), password: str = Form("")):
-    pw_hash = db.hash_pw(password)
-    user = db.get_user_by_email_and_pass(email, pw_hash)
+    try:
+        pw_hash = db.hash_pw(password)
+        user = db.get_user_by_email_and_pass(email, pw_hash)
+    except Exception as e:
+        logger.error(f"Login DB error: {e}")
+        err = f'<div class="err">Ошибка подключения к БД: {str(e)[:120]}</div>'
+        html = LOGIN_HTML.replace("<!-- ERROR -->", err).replace("<!-- EMAIL -->", email)
+        return HTMLResponse(html, status_code=500)
+
     if not user:
         err = '<div class="err">Неверный email или пароль</div>'
         html = LOGIN_HTML.replace("<!-- ERROR -->", err).replace("<!-- EMAIL -->", email)
         return HTMLResponse(html, status_code=401)
+
     token = db.make_session(user["id"], settings.secret_key)
     resp = RedirectResponse("/", status_code=302)
     resp.set_cookie("session", token, httponly=True, max_age=86400 * 30)
@@ -115,7 +128,10 @@ async def logout():
 
 @router.get("/invite/{token}", response_class=HTMLResponse)
 async def invite_page(token: str):
-    user = db.get_user_by_invite(token)
+    try:
+        user = db.get_user_by_invite(token)
+    except Exception:
+        user = None
     if not user:
         return HTMLResponse("<h2 style='font-family:sans-serif;color:#fc8181;padding:40px'>Ссылка недействительна или устарела</h2>")
     html = INVITE_HTML.replace("{{TOKEN}}", token).replace("{{NAME}}", user.get("name", "")).replace("<!-- ERROR -->", "")
@@ -124,12 +140,20 @@ async def invite_page(token: str):
 
 @router.post("/invite/{token}")
 async def do_invite(token: str, password: str = Form(""), password2: str = Form("")):
-    user = db.get_user_by_invite(token)
+    try:
+        user = db.get_user_by_invite(token)
+    except Exception:
+        user = None
     if not user:
         return HTMLResponse("<h2 style='color:#fc8181;padding:40px'>Ссылка недействительна</h2>")
     if password != password2 or len(password) < 6:
-        err = '<div class="err">Пароли не совпадают или слишком короткий (мин. 6 символов)</div>'
+        err = '<div class="err">Пароли не совпадают или слишком короткий (мин. 6)</div>'
         html = INVITE_HTML.replace("{{TOKEN}}", token).replace("{{NAME}}", user.get("name", "")).replace("<!-- ERROR -->", err)
         return HTMLResponse(html, status_code=400)
-    db.update_user(user["id"], password_hash=db.hash_pw(password), active=1, password_set=1, invite_token=None)
+    try:
+        db.update_user(user["id"], password_hash=db.hash_pw(password), active=1, password_set=1, invite_token=None)
+    except Exception as e:
+        err = f'<div class="err">Ошибка: {str(e)[:100]}</div>'
+        html = INVITE_HTML.replace("{{TOKEN}}", token).replace("{{NAME}}", user.get("name", "")).replace("<!-- ERROR -->", err)
+        return HTMLResponse(html, status_code=500)
     return RedirectResponse("/login", status_code=302)
