@@ -2,7 +2,7 @@
 # Telegram Bot -> Bitrix24 Task Creation
 #
 # Usage in Telegram:
-#   /task Иванов - позвонить CEO Kaspi до 12.06
+#   /task Данадил - позвонить CEO Kaspi до 12.06
 #   /help
 
 import httpx
@@ -13,11 +13,16 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Telegram username -> B24 user ID mapping
-# Fill after you know manager IDs in B24
+# Имя/фамилия (любое упоминание) -> B24 user ID
+# Источник: extella.bitrix24.kz, Отдел продаж
 MANAGER_MAP: dict = {
-    # "ivanov": 10,
-    # "petrov": 12,
+    # Асылхан Жусупов — РОП (B24 ID: 1)
+    "асылхан": 1,
+    "жусупов": 1,
+    # Данадил Курманжанов — Менеджер по продажам (B24 ID: 24)
+    "данадил": 24,
+    "курманжанов": 24,
+    "дана": 24,
 }
 
 
@@ -32,6 +37,8 @@ async def handle_message(data: dict) -> None:
         await _send(chat_id, _start_text())
     elif text == "/help":
         await _send(chat_id, _help_text())
+    elif text == "/managers":
+        await _send(chat_id, _managers_text())
     elif text.lower().startswith(("/task", "задача")):
         await _process_task(text, chat_id)
     else:
@@ -41,12 +48,12 @@ async def handle_message(data: dict) -> None:
 async def _process_task(text: str, chat_id: int) -> None:
     parsed = _parse_task(text)
     if not parsed:
-        await _send(chat_id, "Не смог распарсить задачу.\nФормат: /task Иванов - позвонить до 12.06")
+        await _send(chat_id, "Не смог распарсить задачу.\nФормат: /task Данадил - позвонить до 12.06")
         return
     result = await _create_b24_task(parsed)
     if result.get("ok"):
         msg = (
-            f"Задача создана в Bitrix24\n"
+            f"✅ Задача создана в Bitrix24\n"
             f"Ответственный: {parsed['assignee']}\n"
             f"Задача: {parsed['title']}\n"
             f"Дедлайн: {parsed.get('deadline', 'не указан')}\n"
@@ -54,7 +61,7 @@ async def _process_task(text: str, chat_id: int) -> None:
         )
         await _send(chat_id, msg)
     else:
-        await _send(chat_id, f"Ошибка: {result.get('error')}")
+        await _send(chat_id, f"❌ Ошибка: {result.get('error')}")
 
 
 def _parse_task(text: str) -> dict:
@@ -69,7 +76,8 @@ def _parse_task(text: str) -> dict:
         try:
             day, month = int(parts[0]), int(parts[1])
             year = int(parts[2]) if len(parts) > 2 else datetime.now().year
-            if year < 100: year += 2000
+            if year < 100:
+                year += 2000
             deadline = f"{year}-{month:02d}-{day:02d}T18:00:00"
         except Exception:
             pass
@@ -120,9 +128,21 @@ def _start_text() -> str:
     return "Extella Sales Hub — ROP Bot\n\nСоздаю задачи в Bitrix24.\n\nНапиши /help"
 
 
+def _managers_text() -> str:
+    return (
+        "👥 Менеджеры в системе:\n\n"
+        "• Асылхан Жусупов (РОП)\n"
+        "  → /task Асылхан - задача\n\n"
+        "• Данадил Курманжанов (Менеджер)\n"
+        "  → /task Данадил - задача"
+    )
+
+
 def _help_text() -> str:
     return (
         "Команды:\n\n"
         "/task [менеджер] - [описание] до [дд.мм]\n"
-        "Пример: /task Иванов - позвонить CEO Kaspi до 12.06"
+        "Пример: /task Данадил - позвонить CEO Kaspi до 12.06\n\n"
+        "/managers — список менеджеров\n"
+        "/help — эта справка"
     )
