@@ -1,5 +1,5 @@
 # M4: ROP Commander
-# Telegram Bot -> Bitrix24 Task Creation
+# Telegram Bot -> Bitrix24 Task Creation + Supabase logging
 #
 # Usage in Telegram:
 #   /task Данадил - позвонить CEO Kaspi до 12.06
@@ -33,6 +33,9 @@ async def handle_message(data: dict) -> None:
     if not text or not chat_id:
         return
     logger.info(f"Message from {chat_id}: {text[:80]}")
+
+    await _log_activity(chat_id, text)
+
     if text == "/start":
         await _send(chat_id, _start_text())
     elif text == "/help":
@@ -52,12 +55,15 @@ async def _process_task(text: str, chat_id: int) -> None:
         return
     result = await _create_b24_task(parsed)
     if result.get("ok"):
+        task_id = result.get("task_id")
+        # Логируем задачу в Supabase
+        await _log_task(parsed, task_id, chat_id)
         msg = (
             f"✅ Задача создана в Bitrix24\n"
             f"Ответственный: {parsed['assignee']}\n"
             f"Задача: {parsed['title']}\n"
             f"Дедлайн: {parsed.get('deadline', 'не указан')}\n"
-            f"ID задачи: {result.get('task_id')}"
+            f"ID задачи: {task_id}"
         )
         await _send(chat_id, msg)
     else:
@@ -81,7 +87,7 @@ def _parse_task(text: str) -> dict:
             deadline = f"{year}-{month:02d}-{day:02d}T18:00:00"
         except Exception:
             pass
-    sep = re.search(r'[-—]', clean)
+    sep = re.search(r'[-—–]', clean)
     if sep:
         assignee = clean[:sep.start()].strip()
         title = clean[sep.end():].strip()
@@ -111,6 +117,64 @@ async def _create_b24_task(parsed: dict) -> dict:
         return {'ok': False, 'error': str(data.get('error_description', data))}
     except Exception as e:
         return {'ok': False, 'error': str(e)}
+
+
+async def _log_task(parsed: dict, b24_task_id, chat_id: int) -> None:
+    """Логируем созданную задачу в Supabase таблицу tasks."""
+    if not settings.supabase_url or not settings.supabase_key:
+        return
+    try:
+        payload = {
+            "b24_task_id": int(b24_task_id) if b24_task_id else None,
+            "title": parsed.get("title", ""),
+            "assignee_name": parsed.get("assignee", ""),
+            "b24_user_id": parsed.get("b24_user_id"),
+            "deadline": parsed.get("deadline"),
+            "created_by": chat_id,
+            "status": "created",
+        }
+        headers = {
+            "apikey": settings.supabase_key,
+            "Authorization": f"Bearer {settings.supabase_key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        }
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(
+                f"{settings.supabase_url}/rest/v1/tasks",
+                headers=headers,
+                json=payload,
+            )
+    except Exception as e:
+        logger.warning(f"Supabase log failed (non-critical): {e}")
+
+
+async def _log_activity(chat_id: int, text: str) -> None:
+    """Логируем каждое взаимодействие в activity_log."""
+    if not settings.supabase_url or not settings.supabase_key:
+        return
+    try:
+        command = text.split()[0] if text.startswith("/") else "message"
+        payload = {
+            "chat_id": chat_id,
+            "command": command,
+            "raw_text": text[:500],
+            "success": True,
+        }
+        headers = {
+            "apikey": settings.supabase_key,
+            "Authorization": f"Bearer {settings.supabase_key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        }
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(
+                f"{settings.supabase_url}/rest/v1/activity_log",
+                headers=headers,
+                json=payload,
+            )
+    except Exception as e:
+        logger.warning(f"Activity log failed (non-critical): {e}")
 
 
 async def _send(chat_id: int, text: str) -> None:
