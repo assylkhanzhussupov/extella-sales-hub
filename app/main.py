@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from app.routers import health, telegram
+from app.routers import health, telegram, dashboard
 from app.config import settings
 import logging
 
@@ -23,5 +23,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+app.include_router(dashboard.router)
 app.include_router(health.router)
 app.include_router(telegram.router, prefix="/webhook")
